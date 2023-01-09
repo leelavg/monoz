@@ -1,5 +1,13 @@
 const std = @import("std");
 const stdout = std.io.getStdOut().writer();
+const color = @Vector(3, f64);
+
+fn writeColor(writer: anytype, pixelColor: color) !void {
+    const ir = @floatToInt(u16, 255.999 * pixelColor[0]);
+    const ig = @floatToInt(u16, 255.999 * pixelColor[1]);
+    const ib = @floatToInt(u16, 255.999 * pixelColor[2]);
+    try writer.print("{d} {d} {d}\n", .{ ir, ig, ib });
+}
 
 pub fn main() !void {
     const imageWidth: u16 = 256;
@@ -7,20 +15,17 @@ pub fn main() !void {
 
     try stdout.print("P3\n{d} {d}\n255\n", .{ imageWidth, imageHeight });
 
-    var j: usize = imageHeight - 1;
+    var j: u8 = imageHeight - 1;
 
     while (j > 0) : (j -= 1) {
-        var i: usize = 0;
+        var i: u16 = 0;
         while (i < imageWidth) : (i += 1) {
-            var r = @intToFloat(f64, i) / @intToFloat(f64, imageWidth - 1);
-            var g = @intToFloat(f64, j) / @intToFloat(f64, imageHeight - 1);
+            const r = @intToFloat(f64, i) / @intToFloat(f64, imageWidth - 1);
+            const g = @intToFloat(f64, j) / @intToFloat(f64, imageHeight - 1);
             const b = 0.25;
 
-            var ir = @floatToInt(u16, 255.999 * r);
-            var ig = @floatToInt(u16, 255.999 * g);
-            const ib = @floatToInt(u16, 255.999 * b);
-
-            try stdout.print("{d} {d} {d}\n", .{ ir, ig, ib });
+            const pixelColor: color = color{ r, g, b };
+            try writeColor(stdout, pixelColor);
         }
     }
 }
