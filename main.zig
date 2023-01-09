@@ -25,7 +25,7 @@ const ray = struct {
 
     const Self = @This();
     pub fn at(self: Self, t: f32) point3 {
-        return self.origin + expand(t) * self.dir;
+        return self.orig + expand(t) * self.dir;
     }
 };
 
@@ -44,24 +44,28 @@ fn getDotPro(v1: vec, v2: vec) f32 {
     return @reduce(.Add, v1 * v2);
 }
 
-fn hitSphere(center: point3, radius: f32, r: ray) bool {
+fn hitSphere(center: point3, radius: f32, r: ray) f32 {
     // t^2b.b + 2tb.(A-C) + (A-C).(A-C) - r^2 = 0
     // solve for t
     const oc = r.orig - center;
     const a = getDotPro(r.dir, r.dir);
     const b = 2.0 * getDotPro(oc, r.dir);
     const c = getDotPro(oc, oc) - radius * radius;
-    const discriminant = b * b - 4 * a * c;
+    const disc = b * b - 4 * a * c;
     // positive = 2 roots, exact zero = 1 root, negative = 0 roots
     // roots == number of places that ray hits the sphere
-    return (discriminant > 0);
+    if (disc < 0) return -1 else return (-b - math.sqrt(disc) / (2 * a));
 }
 
 // returns background color, a simple gradient
 fn rayColor(r: ray) color {
-    if (hitSphere(point3{ 0, 0, -1 }, 0.5, r)) return color{ 1, 0, 0 };
+    var t = hitSphere(point3{ 0, 0, -1 }, 0.5, r);
+    if (t > 0) {
+        const N = getUnitVec(r.at(t) - vec3{ 0, 0, -1 });
+        return expand(0.5) * color{ N[0] + 1, N[1] + 1, N[2] + 1 };
+    }
     const unitDir = getUnitVec(r.dir);
-    const t: f32 = 0.5 * (unitDir[1] + 1.0);
+    t = 0.5 * (unitDir[1] + 1.0);
     // blendedvalue = (1-t)*startVal + t*endVal
     return expand(1 - t) * color{ 1.0, 1.0, 1.0 } + expand(t) * color{ 0.5, 0.7, 1.0 };
 }
