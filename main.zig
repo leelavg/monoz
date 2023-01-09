@@ -49,12 +49,12 @@ fn hitSphere(center: point3, radius: f32, r: ray) f32 {
     // solve for t
     const oc = r.orig - center;
     const a = getDotPro(r.dir, r.dir);
-    const b = 2.0 * getDotPro(oc, r.dir);
+    const half_b = getDotPro(oc, r.dir);
     const c = getDotPro(oc, oc) - radius * radius;
-    const disc = b * b - 4 * a * c;
+    const disc = half_b * half_b - a * c;
     // positive = 2 roots, exact zero = 1 root, negative = 0 roots
     // roots == number of places that ray hits the sphere
-    if (disc < 0) return -1 else return (-b - math.sqrt(disc) / (2 * a));
+    if (disc < 0) return -1 else return (-half_b - math.sqrt(disc) / a);
 }
 
 // returns background color, a simple gradient
