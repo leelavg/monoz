@@ -2,6 +2,10 @@ const std = @import("std");
 const math = std.math;
 const stdout = std.io.getStdOut().writer();
 const print = std.debug.print;
+const ArrayList = std.ArrayList;
+
+const infinity = math.inf_f32;
+const pi = math.pi;
 
 // base type for all vector operations and identifiers
 // return type for all functions operating on vector
@@ -23,15 +27,100 @@ const ray = struct {
     orig: point3,
     dir: vec3,
 
-    const Self = @This();
-    pub fn at(self: Self, t: f32) point3 {
+    pub fn at(self: ray, t: f32) point3 {
         return self.orig + expand(t) * self.dir;
+    }
+};
+
+const hitRecord = struct {
+    p: point3,
+    n: vec3,
+    t: f32,
+    frontFace: bool,
+
+    pub fn setFaceNormal(self: *hitRecord, r: ray, outwardNormal: vec3) void {
+        self.*.frontFace = getDotPro(r.dir, outwardNormal) < 0;
+        self.*.n = if (self.frontFace) outwardNormal else -outwardNormal;
+    }
+};
+
+const sphere = struct {
+    center: point3,
+    radius: f32,
+
+    pub fn new(center: point3, radius: f32) sphere {
+        return sphere{
+            .center = center,
+            .radius = radius,
+        };
+    }
+
+    pub fn hit(self: sphere, r: ray, tMin: f32, tMax: f32) ?hitRecord {
+        const oc = r.orig - self.center;
+        const a = getDotPro(r.dir, r.dir);
+        const half_b = getDotPro(oc, r.dir);
+        const c = getDotPro(oc, oc) - self.radius * self.radius;
+
+        const disc = half_b * half_b - a * c;
+        if (disc < 0) {
+            return null;
+        }
+
+        const sqrt = math.sqrt(disc);
+        var root = (-half_b - sqrt) / a;
+        if (root < tMin or tMax < root) {
+            root = (-half_b + sqrt) / a;
+            if (root < tMin or tMax < root) {
+                return null;
+            }
+        }
+
+        var rec: hitRecord = undefined;
+        rec.t = root;
+        rec.p = r.at(rec.t);
+        rec.n = (rec.p - self.center) / expand(self.radius);
+        const outwardNormal = (rec.p - self.center) / expand(self.radius);
+        rec.setFaceNormal(r, outwardNormal);
+
+        return rec;
+    }
+};
+
+const world = struct {
+    spheres: ArrayList(sphere),
+
+    pub fn init(alloc: std.mem.Allocator) world {
+        return world{ .spheres = ArrayList(sphere).init(alloc) };
+    }
+
+    pub fn deinit(self: *world) void {
+        self.spheres.deinit();
+    }
+
+    pub fn hit(self: *const world, r: ray, tMin: f32, tMax: f32) ?hitRecord {
+        var mayHit: ?hitRecord = null;
+        var closestSoFar = tMax;
+
+        for (self.spheres.items) |item| {
+            if (item.hit(r, tMin, tMax)) |hitRec| {
+                if (hitRec.t < closestSoFar) {
+                    mayHit = hitRec;
+                    closestSoFar = hitRec.t;
+                }
+            }
+        }
+
+        return mayHit;
     }
 };
 
 // get vector from scalar data, basically scalar times a unit vector
 fn expand(val: f32) vec {
     return @splat(3, val);
+}
+
+fn degToRad(deg: f32) f32 {
+    return deg * pi / 180;
 }
 
 // return unit vector along a direction
@@ -44,28 +133,13 @@ fn getDotPro(v1: vec, v2: vec) f32 {
     return @reduce(.Add, v1 * v2);
 }
 
-fn hitSphere(center: point3, radius: f32, r: ray) f32 {
-    // t^2b.b + 2tb.(A-C) + (A-C).(A-C) - r^2 = 0
-    // solve for t
-    const oc = r.orig - center;
-    const a = getDotPro(r.dir, r.dir);
-    const half_b = getDotPro(oc, r.dir);
-    const c = getDotPro(oc, oc) - radius * radius;
-    const disc = half_b * half_b - a * c;
-    // positive = 2 roots, exact zero = 1 root, negative = 0 roots
-    // roots == number of places that ray hits the sphere
-    if (disc < 0) return -1 else return (-half_b - math.sqrt(disc) / a);
-}
-
 // returns background color, a simple gradient
-fn rayColor(r: ray) color {
-    var t = hitSphere(point3{ 0, 0, -1 }, 0.5, r);
-    if (t > 0) {
-        const N = getUnitVec(r.at(t) - vec3{ 0, 0, -1 });
-        return expand(0.5) * color{ N[0] + 1, N[1] + 1, N[2] + 1 };
+fn rayColor(r: ray, w: world) color {
+    if (w.hit(r, 0, infinity)) |rec| {
+        return expand(0.5) * (rec.n + color{ 1, 1, 1 });
     }
     const unitDir = getUnitVec(r.dir);
-    t = 0.5 * (unitDir[1] + 1.0);
+    const t = 0.5 * (unitDir[1] + 1.0);
     // blendedvalue = (1-t)*startVal + t*endVal
     return expand(1 - t) * color{ 1.0, 1.0, 1.0 } + expand(t) * color{ 0.5, 0.7, 1.0 };
 }
@@ -85,6 +159,18 @@ pub fn main() !void {
     const aspectRatio: f32 = 16.0 / 9.0;
     const imageWidth: u16 = 400;
     const imageHeight: u16 = @floatToInt(u16, @intToFloat(f32, imageWidth) / aspectRatio);
+
+    // World
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
+    defer arena.deinit();
+
+    var alloc = arena.allocator();
+    var w = world.init(alloc);
+    defer w.deinit();
+
+    try w.spheres.append(sphere.new(point3{ 0, 0, -1 }, 0.5));
+    try w.spheres.append(sphere.new(point3{ 0, -100.5, -1 }, 100));
 
     // Camera
     const viewPortHeight: f32 = 2.0;
@@ -112,7 +198,7 @@ pub fn main() !void {
 
             // the ray is originating & passing through origin in the direction with two vectors imposed on the screen
             const r: ray = ray{ .orig = origin, .dir = lowerLeftCor + expand(u) * hor + expand(v) * ver - origin };
-            const pixelColor: color = rayColor(r);
+            const pixelColor: color = rayColor(r, w);
             try writeColor(stdout, pixelColor);
         }
     }
