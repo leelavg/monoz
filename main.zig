@@ -3,6 +3,7 @@ const math = std.math;
 const stdout = std.io.getStdOut().writer();
 const print = std.debug.print;
 const ArrayList = std.ArrayList;
+const randGen = std.rand.DefaultPrng;
 
 const infinity = math.inf_f32;
 const pi = math.pi;
@@ -114,6 +115,37 @@ const world = struct {
     }
 };
 
+const camera = struct {
+    origin: point3,
+    lowerLeftCor: point3,
+    hor: vec3,
+    ver: vec3,
+
+    const Self = @This();
+    pub fn init() Self {
+        const aspectRatio: f32 = 16.0 / 9.0;
+        const viewPortHeight: f32 = 2.0;
+        const viewPortWidth: f32 = aspectRatio * viewPortHeight;
+        const focalLen: f32 = 1.0;
+
+        const origin = point3{ 0, 0, 0 };
+        const hor = vec3{ viewPortWidth, 0, 0 };
+        const ver = vec3{ 0, viewPortHeight, 0 };
+        const half = 2;
+        const lowerLeftCor = origin - hor / expand(half) - ver / expand(half) - vec3{ 0, 0, focalLen };
+
+        return Self{
+            .origin = origin,
+            .lowerLeftCor = lowerLeftCor,
+            .hor = hor,
+            .ver = ver,
+        };
+    }
+
+    pub fn getRay(self: Self, u: f32, v: f32) ray {
+        return ray{ .orig = self.origin, .dir = self.lowerLeftCor + expand(u) * self.hor + expand(v) * self.ver - self.origin };
+    }
+};
 // get vector from scalar data, basically scalar times a unit vector
 fn expand(val: f32) vec {
     return @splat(3, val);
@@ -133,6 +165,10 @@ fn getDotPro(v1: vec, v2: vec) f32 {
     return @reduce(.Add, v1 * v2);
 }
 
+fn getRanFloat(rnd: *randGen) f32 {
+    return rnd.*.random().float(f32);
+}
+
 // returns background color, a simple gradient
 fn rayColor(r: ray, w: world) color {
     if (w.hit(r, 0, infinity)) |rec| {
@@ -144,12 +180,27 @@ fn rayColor(r: ray, w: world) color {
     return expand(1 - t) * color{ 1.0, 1.0, 1.0 } + expand(t) * color{ 0.5, 0.7, 1.0 };
 }
 
+fn clamp(x: f32, min: f32, max: f32) f32 {
+    if (x < min) return min;
+    if (x > max) return max;
+    return x;
+}
+
 // output the rgb info to writer, calculations correspond to how much percent of
 // a color from rgb represents a single pixel
-fn writeColor(writer: anytype, pixelColor: color) !void {
-    const ir = @floatToInt(u16, 255.999 * pixelColor[0]);
-    const ig = @floatToInt(u16, 255.999 * pixelColor[1]);
-    const ib = @floatToInt(u16, 255.999 * pixelColor[2]);
+fn writeColor(writer: anytype, pixelColor: color, samples: u8) !void {
+    var r = pixelColor[0];
+    var g = pixelColor[1];
+    var b = pixelColor[2];
+
+    const scale = 1.0 / @intToFloat(f32, samples);
+    r *= scale;
+    g *= scale;
+    b *= scale;
+
+    const ir = @floatToInt(u16, 255.999 * clamp(r, 0.0, 0.999));
+    const ig = @floatToInt(u16, 255.999 * clamp(g, 0.0, 0.999));
+    const ib = @floatToInt(u16, 255.999 * clamp(b, 0.0, 0.999));
     try writer.print("{d} {d} {d}\n", .{ ir, ig, ib });
 }
 
@@ -159,6 +210,9 @@ pub fn main() !void {
     const aspectRatio: f32 = 16.0 / 9.0;
     const imageWidth: u16 = 400;
     const imageHeight: u16 = @floatToInt(u16, @intToFloat(f32, imageWidth) / aspectRatio);
+    const samples: u8 = 100;
+
+    var rnd = std.rand.DefaultPrng.init(0);
 
     // World
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -173,18 +227,7 @@ pub fn main() !void {
     try w.spheres.append(sphere.new(point3{ 0, -100.5, -1 }, 100));
 
     // Camera
-    const viewPortHeight: f32 = 2.0;
-    const viewPortWidth: f32 = aspectRatio * viewPortHeight;
-
-    // distance b/n projection plane and the projection point
-    const focalLen: f32 = 1.0;
-
-    // camera/eye origin
-    const origin: point3 = point3{ 0, 0, 0 };
-    const hor: vec3 = vec3{ viewPortWidth, 0, 0 };
-    const ver: vec3 = vec3{ 0, viewPortHeight, 0 };
-    const half: f32 = 2;
-    const lowerLeftCor: vec3 = origin - hor / expand(half) - ver / expand(half) - vec3{ 0, 0, focalLen };
+    const cam = camera.init();
 
     // Render
     try stdout.print("P3\n{d} {d}\n255\n", .{ imageWidth, imageHeight });
@@ -193,13 +236,17 @@ pub fn main() !void {
     while (j > 0) : (j -= 1) {
         var i: u16 = 0;
         while (i < imageWidth) : (i += 1) {
-            const u = @intToFloat(f32, i) / @intToFloat(f32, imageWidth - 1);
-            const v = @intToFloat(f32, j) / @intToFloat(f32, imageHeight - 1);
+            var pixelColor: color = color{ 0, 0, 0 };
+            var s: u8 = 0;
+            while (s <= samples) : (s += 1) {
+                const u = (@intToFloat(f32, i) + getRanFloat(&rnd)) / @intToFloat(f32, imageWidth - 1);
+                const v = (@intToFloat(f32, j) + getRanFloat(&rnd)) / @intToFloat(f32, imageHeight - 1);
 
-            // the ray is originating & passing through origin in the direction with two vectors imposed on the screen
-            const r: ray = ray{ .orig = origin, .dir = lowerLeftCor + expand(u) * hor + expand(v) * ver - origin };
-            const pixelColor: color = rayColor(r, w);
-            try writeColor(stdout, pixelColor);
+                // the ray is originating & passing through origin in the direction with two vectors imposed on the screen
+                const r: ray = cam.getRay(u, v);
+                pixelColor += rayColor(r, w);
+            }
+            try writeColor(stdout, pixelColor, samples);
         }
     }
 }
