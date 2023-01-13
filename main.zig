@@ -189,7 +189,7 @@ fn ranUnitSphere(rnd: *randGen) vec {
 fn rayColor(r: ray, w: world, rnd: *randGen, depth: u8) color {
     if (depth <= 0) return color{ 0, 0, 0 };
 
-    if (w.hit(r, 0, infinity)) |rec| {
+    if (w.hit(r, 0.001, infinity)) |rec| {
         const target = rec.p + rec.n + ranUnitSphere(rnd);
         return expand(0.5) * rayColor(ray{ .orig = rec.p, .dir = target - rec.p }, w, rnd, depth - 1);
     }
@@ -213,9 +213,9 @@ fn writeColor(writer: anytype, pixelColor: color, samples: u8) !void {
     var b = pixelColor[2];
 
     const scale = 1.0 / @intToFloat(f32, samples);
-    r *= scale;
-    g *= scale;
-    b *= scale;
+    r = math.sqrt(scale * r);
+    g = math.sqrt(scale * g);
+    b = math.sqrt(scale * b);
 
     const ir = @floatToInt(u16, 255.999 * clamp(r, 0.0, 0.999));
     const ig = @floatToInt(u16, 255.999 * clamp(g, 0.0, 0.999));
