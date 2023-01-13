@@ -166,13 +166,32 @@ fn getDotPro(v1: vec, v2: vec) f32 {
 }
 
 fn getRanFloat(rnd: *randGen) f32 {
-    return rnd.*.random().float(f32);
+    return rnd.random().float(f32);
+}
+
+fn getRanVec(rnd: *randGen, min: f32, max: f32) vec {
+    return vec3{
+        min + (max - min) * rnd.random().float(f32),
+        min + (max - min) * rnd.random().float(f32),
+        min + (max - min) * rnd.random().float(f32),
+    };
+}
+
+fn ranUnitSphere(rnd: *randGen) vec {
+    while (true) {
+        const p = getRanVec(rnd, -1, 1);
+        if (getDotPro(p, p) >= 1) continue;
+        return p;
+    }
 }
 
 // returns background color, a simple gradient
-fn rayColor(r: ray, w: world) color {
+fn rayColor(r: ray, w: world, rnd: *randGen, depth: u8) color {
+    if (depth <= 0) return color{ 0, 0, 0 };
+
     if (w.hit(r, 0, infinity)) |rec| {
-        return expand(0.5) * (rec.n + color{ 1, 1, 1 });
+        const target = rec.p + rec.n + ranUnitSphere(rnd);
+        return expand(0.5) * rayColor(ray{ .orig = rec.p, .dir = target - rec.p }, w, rnd, depth - 1);
     }
     const unitDir = getUnitVec(r.dir);
     const t = 0.5 * (unitDir[1] + 1.0);
@@ -211,6 +230,7 @@ pub fn main() !void {
     const imageWidth: u16 = 400;
     const imageHeight: u16 = @floatToInt(u16, @intToFloat(f32, imageWidth) / aspectRatio);
     const samples: u8 = 100;
+    const maxDepth: u8 = 50;
 
     var rnd = std.rand.DefaultPrng.init(0);
 
@@ -235,6 +255,7 @@ pub fn main() !void {
 
     while (j > 0) : (j -= 1) {
         var i: u16 = 0;
+        print("\rScanning remaining lines: {d}{s}", .{ j - 1, "\x1B[K" });
         while (i < imageWidth) : (i += 1) {
             var pixelColor: color = color{ 0, 0, 0 };
             var s: u8 = 0;
@@ -244,9 +265,10 @@ pub fn main() !void {
 
                 // the ray is originating & passing through origin in the direction with two vectors imposed on the screen
                 const r: ray = cam.getRay(u, v);
-                pixelColor += rayColor(r, w);
+                pixelColor += rayColor(r, w, &rnd, maxDepth);
             }
             try writeColor(stdout, pixelColor, samples);
         }
     }
+    print(" === Done rendering ===", .{});
 }
