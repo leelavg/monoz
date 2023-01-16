@@ -185,12 +185,26 @@ fn ranUnitSphere(rnd: *randGen) vec {
     }
 }
 
+fn ranUnitVec(rnd: *randGen) vec {
+    return getUnitVec(ranUnitSphere(rnd));
+}
+
+fn ranInHem(n: vec, rnd: *randGen) vec {
+    const inUnitSphere = ranUnitSphere(rnd);
+    if (getDotPro(inUnitSphere, n) > 0.0) {
+        return inUnitSphere;
+    } else {
+        return -inUnitSphere;
+    }
+}
+
 // returns background color, a simple gradient
 fn rayColor(r: ray, w: world, rnd: *randGen, depth: u8) color {
     if (depth <= 0) return color{ 0, 0, 0 };
 
     if (w.hit(r, 0.001, infinity)) |rec| {
-        const target = rec.p + rec.n + ranUnitSphere(rnd);
+        // const target = rec.p + rec.n + ranUnitVec(rnd);
+        const target = rec.p + rec.n + ranInHem(rec.n, rnd);
         return expand(0.5) * rayColor(ray{ .orig = rec.p, .dir = target - rec.p }, w, rnd, depth - 1);
     }
     const unitDir = getUnitVec(r.dir);
