@@ -33,10 +33,62 @@ const ray = struct {
     }
 };
 
+const metal = struct {
+    albedo: color,
+
+    fn scat(self: metal, r: ray, rec: hitRecord) ?scatter {
+        const reflected = reflect(getUnitVec(r.dir), rec.n);
+        const sd = ray{ .orig = rec.p, .dir = reflected };
+        if (getDotPro(sd.dir, rec.n) > 0) {
+            return scatter{
+                .att = self.albedo,
+                .r = sd,
+            };
+        }
+        return null;
+    }
+};
+
+const material = union(enum) {
+    l: lambertian,
+    m: metal,
+
+    pub fn lamber(albedo: color) material {
+        return material{ .l = lambertian{ .albedo = albedo } };
+    }
+
+    pub fn met(albedo: color) material {
+        return material{ .m = metal{ .albedo = albedo } };
+    }
+};
+
+const scatter = struct {
+    att: color,
+    r: ray,
+};
+
+const lambertian = struct {
+    albedo: color,
+
+    pub fn scat(self: lambertian, rec: hitRecord, rnd: *randGen) ?scatter {
+        var sd = rec.n + ranUnitVec(rnd);
+        if (isNearZero(sd)) {
+            sd = rec.n;
+        }
+        const s = ray{ .orig = rec.p, .dir = sd };
+        const att = self.albedo;
+        return scatter{
+            .att = att,
+            .r = s,
+        };
+    }
+};
+
 const hitRecord = struct {
     p: point3,
     n: vec3,
     t: f32,
+    mp: material,
     frontFace: bool,
 
     pub fn setFaceNormal(self: *hitRecord, r: ray, outwardNormal: vec3) void {
@@ -48,11 +100,13 @@ const hitRecord = struct {
 const sphere = struct {
     center: point3,
     radius: f32,
+    mp: material,
 
-    pub fn new(center: point3, radius: f32) sphere {
+    pub fn new(center: point3, radius: f32, mp: material) sphere {
         return sphere{
             .center = center,
             .radius = radius,
+            .mp = mp,
         };
     }
 
@@ -82,6 +136,7 @@ const sphere = struct {
         rec.n = (rec.p - self.center) / expand(self.radius);
         const outwardNormal = (rec.p - self.center) / expand(self.radius);
         rec.setFaceNormal(r, outwardNormal);
+        rec.mp = self.mp;
 
         return rec;
     }
@@ -198,14 +253,26 @@ fn ranInHem(n: vec, rnd: *randGen) vec {
     }
 }
 
+fn isNearZero(v: vec) bool {
+    const s = 1e-8;
+    return math.fabs(v[0]) < s and math.fabs(v[1]) < s and math.fabs(v[2]) < s;
+}
+
+fn reflect(v: vec, n: vec) vec {
+    return v - expand(2 * getDotPro(v, n)) * n;
+}
+
 // returns background color, a simple gradient
 fn rayColor(r: ray, w: world, rnd: *randGen, depth: u8) color {
     if (depth <= 0) return color{ 0, 0, 0 };
 
     if (w.hit(r, 0.001, infinity)) |rec| {
-        // const target = rec.p + rec.n + ranUnitVec(rnd);
-        const target = rec.p + rec.n + ranInHem(rec.n, rnd);
-        return expand(0.5) * rayColor(ray{ .orig = rec.p, .dir = target - rec.p }, w, rnd, depth - 1);
+        const s = switch (rec.mp) {
+            material.l => |l| l.scat(rec, rnd),
+            material.m => |m| m.scat(r, rec),
+        };
+        if (s) |scat| return scat.att * rayColor(scat.r, w, rnd, depth - 1);
+        return color{ 0, 0, 0 };
     }
     const unitDir = getUnitVec(r.dir);
     const t = 0.5 * (unitDir[1] + 1.0);
@@ -249,6 +316,11 @@ pub fn main() !void {
     var rnd = std.rand.DefaultPrng.init(0);
 
     // World
+    var matGround = material.lamber(color{ 0.8, 0.8, 0.0 });
+    var matCenter = material.lamber(color{ 0.7, 0.3, 0.3 });
+    var matLeft = material.met(color{ 0.8, 0.8, 0.8 });
+    var matRight = material.met(color{ 0.8, 0.6, 0.2 });
+
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
     defer arena.deinit();
@@ -257,8 +329,10 @@ pub fn main() !void {
     var w = world.init(alloc);
     defer w.deinit();
 
-    try w.spheres.append(sphere.new(point3{ 0, 0, -1 }, 0.5));
-    try w.spheres.append(sphere.new(point3{ 0, -100.5, -1 }, 100));
+    try w.spheres.append(sphere.new(point3{ 0.0, -100.5, -1.0 }, 100.0, matGround));
+    try w.spheres.append(sphere.new(point3{ 0.0, 0.0, -1.0 }, 0.5, matCenter));
+    try w.spheres.append(sphere.new(point3{ -1.0, 0.0, -1.0 }, 0.5, matLeft));
+    try w.spheres.append(sphere.new(point3{ 1.0, 0.0, -1.0 }, 0.5, matRight));
 
     // Camera
     const cam = camera.init();
