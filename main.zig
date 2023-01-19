@@ -35,10 +35,11 @@ const ray = struct {
 
 const metal = struct {
     albedo: color,
+    fuzz: f32,
 
-    fn scat(self: metal, r: ray, rec: hitRecord) ?scatter {
+    fn scat(self: metal, r: ray, rec: hitRecord, rnd: *randGen) ?scatter {
         const reflected = reflect(getUnitVec(r.dir), rec.n);
-        const sd = ray{ .orig = rec.p, .dir = reflected };
+        const sd = ray{ .orig = rec.p, .dir = reflected + expand(self.fuzz) * ranUnitSphere(rnd) };
         if (getDotPro(sd.dir, rec.n) > 0) {
             return scatter{
                 .att = self.albedo,
@@ -57,8 +58,8 @@ const material = union(enum) {
         return material{ .l = lambertian{ .albedo = albedo } };
     }
 
-    pub fn met(albedo: color) material {
-        return material{ .m = metal{ .albedo = albedo } };
+    pub fn met(albedo: color, fuzz: f32) material {
+        return material{ .m = metal{ .albedo = albedo, .fuzz = if (fuzz < 1) fuzz else 1 } };
     }
 };
 
@@ -269,7 +270,7 @@ fn rayColor(r: ray, w: world, rnd: *randGen, depth: u8) color {
     if (w.hit(r, 0.001, infinity)) |rec| {
         const s = switch (rec.mp) {
             material.l => |l| l.scat(rec, rnd),
-            material.m => |m| m.scat(r, rec),
+            material.m => |m| m.scat(r, rec, rnd),
         };
         if (s) |scat| return scat.att * rayColor(scat.r, w, rnd, depth - 1);
         return color{ 0, 0, 0 };
@@ -318,8 +319,8 @@ pub fn main() !void {
     // World
     var matGround = material.lamber(color{ 0.8, 0.8, 0.0 });
     var matCenter = material.lamber(color{ 0.7, 0.3, 0.3 });
-    var matLeft = material.met(color{ 0.8, 0.8, 0.8 });
-    var matRight = material.met(color{ 0.8, 0.6, 0.2 });
+    var matLeft = material.met(color{ 0.8, 0.8, 0.8 }, 0.3);
+    var matRight = material.met(color{ 0.8, 0.6, 0.2 }, 1.0);
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
@@ -341,9 +342,10 @@ pub fn main() !void {
     try stdout.print("P3\n{d} {d}\n255\n", .{ imageWidth, imageHeight });
     var j: u8 = imageHeight - 1;
 
+    const clr = "\x1B[k";
     while (j > 0) : (j -= 1) {
         var i: u16 = 0;
-        print("\rScanning remaining lines: {d}{s}", .{ j - 1, "\x1B[K" });
+        print("\rScanning remaining lines: {d}{s}", .{ j, clr });
         while (i < imageWidth) : (i += 1) {
             var pixelColor: color = color{ 0, 0, 0 };
             var s: u8 = 0;
@@ -358,5 +360,5 @@ pub fn main() !void {
             try writeColor(stdout, pixelColor, samples);
         }
     }
-    print(" === Done rendering ===", .{});
+    print("\r=== Done rendering ==={s}\n", .{clr});
 }
