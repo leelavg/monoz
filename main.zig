@@ -53,14 +53,19 @@ const metal = struct {
 const dielectric = struct {
     ir: f32,
 
-    fn scat(self: dielectric, r: ray, rec: hitRecord) ?scatter {
+    fn reflectance(_: dielectric, cos: f32, refIdx: f32) f32 {
+        var r0 = (1 - refIdx) / (1 + refIdx);
+        r0 = r0 * r0;
+        return r0 + (1 - r0) * math.pow(f32, (1 - cos), 5);
+    }
+    fn scat(self: dielectric, r: ray, rec: hitRecord, rnd: *randGen) ?scatter {
         const rr = if (rec.frontFace) (1.0 / self.ir) else self.ir;
         const unitDir = getUnitVec(r.dir);
         const cosT = @min(getDotPro(-unitDir, rec.n), 1.0);
         const sinT = math.sqrt(1.0 - cosT * cosT);
 
         const cannotRef = rr * sinT > 1.0;
-        const dir = if (cannotRef)
+        const dir = if (cannotRef or self.reflectance(cosT, rr) > getRanFloat(rnd))
             reflect(unitDir, rec.n)
         else
             refract(unitDir, rec.n, rr);
@@ -305,7 +310,7 @@ fn rayColor(r: ray, w: world, rnd: *randGen, depth: u8) color {
         const s = switch (rec.mp) {
             material.l => |l| l.scat(rec, rnd),
             material.m => |m| m.scat(r, rec, rnd),
-            material.d => |d| d.scat(r, rec),
+            material.d => |d| d.scat(r, rec, rnd),
         };
         if (s) |scat| return scat.att * rayColor(scat.r, w, rnd, depth - 1);
         return color{ 0, 0, 0 };
@@ -368,6 +373,7 @@ pub fn main() !void {
     try w.spheres.append(sphere.new(point3{ 0.0, -100.5, -1.0 }, 100.0, matGround));
     try w.spheres.append(sphere.new(point3{ 0.0, 0.0, -1.0 }, 0.5, matCenter));
     try w.spheres.append(sphere.new(point3{ -1.0, 0.0, -1.0 }, 0.5, matLeft));
+    try w.spheres.append(sphere.new(point3{ -1.0, 0.0, -1.0 }, -0.4, matLeft));
     try w.spheres.append(sphere.new(point3{ 1.0, 0.0, -1.0 }, 0.5, matRight));
 
     // Camera
