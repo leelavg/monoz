@@ -50,9 +50,24 @@ const metal = struct {
     }
 };
 
+const dielectric = struct {
+    ir: f32,
+
+    fn scat(self: dielectric, r: ray, rec: hitRecord) ?scatter {
+        const rr = if (rec.frontFace) (1.0 / self.ir) else self.ir;
+        const unitDir = getUnitVec(r.dir);
+        const ref = refract(unitDir, rec.n, rr);
+        return scatter{
+            .att = color{ 1.0, 1.0, 1.0 },
+            .r = ray{ .orig = rec.p, .dir = ref },
+        };
+    }
+};
+
 const material = union(enum) {
     l: lambertian,
     m: metal,
+    d: dielectric,
 
     pub fn lamber(albedo: color) material {
         return material{ .l = lambertian{ .albedo = albedo } };
@@ -60,6 +75,10 @@ const material = union(enum) {
 
     pub fn met(albedo: color, fuzz: f32) material {
         return material{ .m = metal{ .albedo = albedo, .fuzz = if (fuzz < 1) fuzz else 1 } };
+    }
+
+    pub fn di(ir: f32) material {
+        return material{ .d = dielectric{ .ir = ir } };
     }
 };
 
@@ -263,6 +282,13 @@ fn reflect(v: vec, n: vec) vec {
     return v - expand(2 * getDotPro(v, n)) * n;
 }
 
+fn refract(uv: vec, n: vec, eoe: f32) vec {
+    const cosT = @min(getDotPro(-uv, n), 1.0);
+    const rPer = expand(eoe) * (uv + expand(cosT) * n);
+    const rPar = expand(-math.sqrt(math.fabs(1.0 - getDotPro(rPer, rPer)))) * n;
+    return rPer + rPar;
+}
+
 // returns background color, a simple gradient
 fn rayColor(r: ray, w: world, rnd: *randGen, depth: u8) color {
     if (depth <= 0) return color{ 0, 0, 0 };
@@ -271,6 +297,7 @@ fn rayColor(r: ray, w: world, rnd: *randGen, depth: u8) color {
         const s = switch (rec.mp) {
             material.l => |l| l.scat(rec, rnd),
             material.m => |m| m.scat(r, rec, rnd),
+            material.d => |d| d.scat(r, rec),
         };
         if (s) |scat| return scat.att * rayColor(scat.r, w, rnd, depth - 1);
         return color{ 0, 0, 0 };
@@ -318,8 +345,8 @@ pub fn main() !void {
 
     // World
     var matGround = material.lamber(color{ 0.8, 0.8, 0.0 });
-    var matCenter = material.lamber(color{ 0.7, 0.3, 0.3 });
-    var matLeft = material.met(color{ 0.8, 0.8, 0.8 }, 0.3);
+    var matCenter = material.di(1.5);
+    var matLeft = material.di(1.5);
     var matRight = material.met(color{ 0.8, 0.6, 0.2 }, 1.0);
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -342,7 +369,7 @@ pub fn main() !void {
     try stdout.print("P3\n{d} {d}\n255\n", .{ imageWidth, imageHeight });
     var j: u8 = imageHeight - 1;
 
-    const clr = "\x1B[k";
+    const clr = "\x1B[K";
     while (j > 0) : (j -= 1) {
         var i: u16 = 0;
         print("\rScanning remaining lines: {d}{s}", .{ j, clr });
