@@ -56,10 +56,18 @@ const dielectric = struct {
     fn scat(self: dielectric, r: ray, rec: hitRecord) ?scatter {
         const rr = if (rec.frontFace) (1.0 / self.ir) else self.ir;
         const unitDir = getUnitVec(r.dir);
-        const ref = refract(unitDir, rec.n, rr);
+        const cosT = @min(getDotPro(-unitDir, rec.n), 1.0);
+        const sinT = math.sqrt(1.0 - cosT * cosT);
+
+        const cannotRef = rr * sinT > 1.0;
+        const dir = if (cannotRef)
+            reflect(unitDir, rec.n)
+        else
+            refract(unitDir, rec.n, rr);
+
         return scatter{
             .att = color{ 1.0, 1.0, 1.0 },
-            .r = ray{ .orig = rec.p, .dir = ref },
+            .r = ray{ .orig = rec.p, .dir = dir },
         };
     }
 };
@@ -345,7 +353,7 @@ pub fn main() !void {
 
     // World
     var matGround = material.lamber(color{ 0.8, 0.8, 0.0 });
-    var matCenter = material.di(1.5);
+    var matCenter = material.lamber(color{ 0.1, 0.2, 0.5 });
     var matLeft = material.di(1.5);
     var matRight = material.met(color{ 0.8, 0.6, 0.2 }, 1.0);
 
