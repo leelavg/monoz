@@ -210,10 +210,12 @@ const camera = struct {
     ver: vec3,
 
     const Self = @This();
-    pub fn init() Self {
-        const aspectRatio: f32 = 16.0 / 9.0;
-        const viewPortHeight: f32 = 2.0;
+    pub fn init(vfov: f32, aspectRatio: f32) Self {
+        const theta = math.degreesToRadians(f32, vfov);
+        const h = math.tan(theta / 2);
+        const viewPortHeight: f32 = 2.0 * h;
         const viewPortWidth: f32 = aspectRatio * viewPortHeight;
+
         const focalLen: f32 = 1.0;
 
         const origin = point3{ 0, 0, 0 };
@@ -357,10 +359,10 @@ pub fn main() !void {
     var rnd = std.rand.DefaultPrng.init(0);
 
     // World
-    var matGround = material.lamber(color{ 0.8, 0.8, 0.0 });
-    var matCenter = material.lamber(color{ 0.1, 0.2, 0.5 });
-    var matLeft = material.di(1.5);
-    var matRight = material.met(color{ 0.8, 0.6, 0.2 }, 1.0);
+    const R = math.cos(pi / @as(f32, 4));
+
+    var matLeft = material.lamber(color{ 0, 0, 1 });
+    var matRight = material.lamber(color{ 1, 0, 0 });
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
@@ -370,14 +372,11 @@ pub fn main() !void {
     var w = world.init(alloc);
     defer w.deinit();
 
-    try w.spheres.append(sphere.new(point3{ 0.0, -100.5, -1.0 }, 100.0, matGround));
-    try w.spheres.append(sphere.new(point3{ 0.0, 0.0, -1.0 }, 0.5, matCenter));
-    try w.spheres.append(sphere.new(point3{ -1.0, 0.0, -1.0 }, 0.5, matLeft));
-    try w.spheres.append(sphere.new(point3{ -1.0, 0.0, -1.0 }, -0.4, matLeft));
-    try w.spheres.append(sphere.new(point3{ 1.0, 0.0, -1.0 }, 0.5, matRight));
+    try w.spheres.append(sphere.new(point3{ -R, 0, -1 }, R, matLeft));
+    try w.spheres.append(sphere.new(point3{ R, 0, -1 }, R, matRight));
 
     // Camera
-    const cam = camera.init();
+    const cam = camera.init(90.0, aspectRatio);
 
     // Render
     try stdout.print("P3\n{d} {d}\n255\n", .{ imageWidth, imageHeight });
