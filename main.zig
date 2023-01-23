@@ -210,19 +210,21 @@ const camera = struct {
     ver: vec3,
 
     const Self = @This();
-    pub fn init(vfov: f32, aspectRatio: f32) Self {
+    pub fn init(lookfrom: point3, lookat: point3, vup: vec3, vfov: f32, aspectRatio: f32) Self {
         const theta = math.degreesToRadians(f32, vfov);
         const h = math.tan(theta / 2);
         const viewPortHeight: f32 = 2.0 * h;
         const viewPortWidth: f32 = aspectRatio * viewPortHeight;
 
-        const focalLen: f32 = 1.0;
+        const w = getUnitVec(lookfrom - lookat);
+        const u = getUnitVec(getCrossPro(vup, w));
+        const v = getCrossPro(w, u);
 
-        const origin = point3{ 0, 0, 0 };
-        const hor = vec3{ viewPortWidth, 0, 0 };
-        const ver = vec3{ 0, viewPortHeight, 0 };
+        const origin = lookfrom;
+        const hor = expand(viewPortWidth) * u;
+        const ver = expand(viewPortHeight) * v;
         const half = 2;
-        const lowerLeftCor = origin - hor / expand(half) - ver / expand(half) - vec3{ 0, 0, focalLen };
+        const lowerLeftCor = origin - hor / expand(half) - ver / expand(half) - w;
 
         return Self{
             .origin = origin,
@@ -232,8 +234,8 @@ const camera = struct {
         };
     }
 
-    pub fn getRay(self: Self, u: f32, v: f32) ray {
-        return ray{ .orig = self.origin, .dir = self.lowerLeftCor + expand(u) * self.hor + expand(v) * self.ver - self.origin };
+    pub fn getRay(self: Self, s: f32, t: f32) ray {
+        return ray{ .orig = self.origin, .dir = self.lowerLeftCor + expand(s) * self.hor + expand(t) * self.ver - self.origin };
     }
 };
 // get vector from scalar data, basically scalar times a unit vector
@@ -253,6 +255,14 @@ fn getUnitVec(dir: vec) vec {
 // return dot product of two vectors
 fn getDotPro(v1: vec, v2: vec) f32 {
     return @reduce(.Add, v1 * v2);
+}
+
+fn getCrossPro(v1: vec, v2: vec) vec {
+    return vec{
+        v1[1] * v2[2] - v1[2] * v2[1],
+        v1[2] * v2[0] - v1[0] * v2[2],
+        v1[0] * v2[1] - v1[1] * v2[0],
+    };
 }
 
 fn getRanFloat(rnd: *randGen) f32 {
@@ -359,10 +369,10 @@ pub fn main() !void {
     var rnd = std.rand.DefaultPrng.init(0);
 
     // World
-    const R = math.cos(pi / @as(f32, 4));
-
-    var matLeft = material.lamber(color{ 0, 0, 1 });
-    var matRight = material.lamber(color{ 1, 0, 0 });
+    var matGround = material.lamber(color{ 0.8, 0.8, 0.0 });
+    var matCenter = material.lamber(color{ 0.1, 0.2, 0.5 });
+    var matLeft = material.di(1.5);
+    var matRight = material.met(color{ 0.8, 0.6, 0.2 }, 1.0);
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
@@ -372,11 +382,14 @@ pub fn main() !void {
     var w = world.init(alloc);
     defer w.deinit();
 
-    try w.spheres.append(sphere.new(point3{ -R, 0, -1 }, R, matLeft));
-    try w.spheres.append(sphere.new(point3{ R, 0, -1 }, R, matRight));
+    try w.spheres.append(sphere.new(point3{ 0.0, -100.5, -1.0 }, 100.0, matGround));
+    try w.spheres.append(sphere.new(point3{ 0.0, 0.0, -1.0 }, 0.5, matCenter));
+    try w.spheres.append(sphere.new(point3{ -1.0, 0.0, -1.0 }, 0.5, matLeft));
+    try w.spheres.append(sphere.new(point3{ -1.0, 0.0, -1.0 }, -0.4, matLeft));
+    try w.spheres.append(sphere.new(point3{ 1.0, 0.0, -1.0 }, 0.5, matRight));
 
     // Camera
-    const cam = camera.init(90.0, aspectRatio);
+    const cam = camera.init(point3{ -2, 2, 1 }, point3{ 0, 0, -1 }, vec3{ 0, 1, 0 }, 90, aspectRatio);
 
     // Render
     try stdout.print("P3\n{d} {d}\n255\n", .{ imageWidth, imageHeight });
