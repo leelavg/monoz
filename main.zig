@@ -389,7 +389,7 @@ pub fn main() !void {
     try w.spheres.append(sphere.new(point3{ 1.0, 0.0, -1.0 }, 0.5, matRight));
 
     // Camera
-    const cam = camera.init(point3{ -2, 2, 1 }, point3{ 0, 0, -1 }, vec3{ 0, 1, 0 }, 90, aspectRatio);
+    const cam = camera.init(point3{ -2, 2, 1 }, point3{ 0, 0, -1 }, vec3{ 0, 1, 0 }, 20, aspectRatio);
 
     // Render
     try stdout.print("P3\n{d} {d}\n255\n", .{ imageWidth, imageHeight });
