@@ -1,5 +1,8 @@
 const std = @import("std");
+const time = std.time;
+const fmt = std.fmt;
 const math = std.math;
+const bufIO = std.io.bufferedWriter;
 const stdout = std.io.getStdOut().writer();
 const print = std.debug.print;
 const ArrayList = std.ArrayList;
@@ -295,13 +298,25 @@ fn getRanFloatInRange(rnd: *randGen, min: f32, max: f32) f32 {
     return min + (max - min) * getRanFloat(rnd);
 }
 
+fn getRanVec(rnd: *randGen) vec3 {
+    return vec3{
+        getRanFloat(rnd),
+        getRanFloat(rnd),
+        getRanFloat(rnd),
+    };
+}
+
+fn getRanVecInRange(rnd: *randGen, min: f32, max: f32) vec3 {
+    return vec3{
+        getRanFloatInRange(rnd, min, max),
+        getRanFloatInRange(rnd, min, max),
+        getRanFloatInRange(rnd, min, max),
+    };
+}
+
 fn getRanUnitSphere(rnd: *randGen) vec {
     while (true) {
-        const p = vec3{
-            getRanFloatInRange(rnd, -1, 1),
-            getRanFloatInRange(rnd, -1, 1),
-            getRanFloatInRange(rnd, -1, 1),
-        };
+        const p = getRanVecInRange(rnd, -1, 1);
         if (getDotPro(p, p) >= 1) continue;
         return p;
     }
@@ -330,6 +345,52 @@ fn getRanInHem(n: vec, rnd: *randGen) vec {
     } else {
         return -inUnitSphere;
     }
+}
+
+fn getRanScene(alloc: std.mem.Allocator, rnd: *randGen) !world {
+    var w: world = world.init(alloc);
+
+    const matGround = material.lamber(color{ 0.5, 0.5, 0.5 });
+    try w.spheres.append(sphere.new(point3{ 0, -1000, 0 }, 1000, matGround));
+
+    var a: i8 = -11;
+    while (a < 11) : (a += 1) {
+        var b: i8 = -11;
+        while (b < 11) : (b += 1) {
+            const chooseMat = getRanFloat(rnd);
+            const center = point3{
+                @intToFloat(f32, a) + 0.9 * getRanFloat(rnd),
+                0.2,
+                @intToFloat(f32, b) + 0.9 * getRanFloat(rnd),
+            };
+
+            const dist = center - point3{ 4, 0.2, 0 };
+            if (math.sqrt(getDotPro(dist, dist)) > 0.9) {
+                const mat: material = if (chooseMat < 0.8) lamber: {
+                    const albedo = getRanVec(rnd) * getRanVec(rnd);
+                    break :lamber material.lamber(albedo);
+                } else if (chooseMat < 0.95) diff: {
+                    const albedo = getRanVecInRange(rnd, 0.5, 1);
+                    const fuzz = getRanFloatInRange(rnd, 0, 0.5);
+                    break :diff material.met(albedo, fuzz);
+                } else glass: {
+                    break :glass material.di(1.5);
+                };
+                try w.spheres.append(sphere.new(center, 0.2, mat));
+            }
+        }
+    }
+
+    const mat1 = material.di(1.5);
+    try w.spheres.append(sphere.new(point3{ 0, 1, 0 }, 1.0, mat1));
+
+    const mat2 = material.lamber(color{ 0.4, 0.2, 0.1 });
+    try w.spheres.append(sphere.new(point3{ -4, 1, 0 }, 1.0, mat2));
+
+    const mat3 = material.met(color{ 0.7, 0.6, 0.5 }, 0.0);
+    try w.spheres.append(sphere.new(point3{ 4, 1, 0 }, 1.0, mat3));
+
+    return w;
 }
 
 fn isNearZero(v: vec) bool {
@@ -375,7 +436,7 @@ fn clamp(x: f32, min: f32, max: f32) f32 {
 
 // output the rgb info to writer, calculations correspond to how much percent of
 // a color from rgb represents a single pixel
-fn writeColor(writer: anytype, pixelColor: color, samples: u8) !void {
+fn writeColor(writer: anytype, pixelColor: color, samples: u16) !void {
     var r = pixelColor[0];
     var g = pixelColor[1];
     var b = pixelColor[2];
@@ -395,44 +456,34 @@ pub fn main() !void {
 
     // Image
     const aspectRatio: f32 = 16.0 / 9.0;
-    const imageWidth: u16 = 400;
+    const imageWidth: u16 = 1200;
     const imageHeight: u16 = @floatToInt(u16, @intToFloat(f32, imageWidth) / aspectRatio);
-    const samples: u8 = 100;
+    const samples: u16 = 500;
     const maxDepth: u8 = 50;
 
     var rnd = std.rand.DefaultPrng.init(0);
 
     // World
-    var matGround = material.lamber(color{ 0.8, 0.8, 0.0 });
-    var matCenter = material.lamber(color{ 0.1, 0.2, 0.5 });
-    var matLeft = material.di(1.5);
-    var matRight = material.met(color{ 0.8, 0.6, 0.2 }, 1.0);
-
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
     defer arena.deinit();
 
     var alloc = arena.allocator();
-    var w = world.init(alloc);
+    var w = try getRanScene(alloc, &rnd);
     defer w.deinit();
 
-    try w.spheres.append(sphere.new(point3{ 0.0, -100.5, -1.0 }, 100.0, matGround));
-    try w.spheres.append(sphere.new(point3{ 0.0, 0.0, -1.0 }, 0.5, matCenter));
-    try w.spheres.append(sphere.new(point3{ -1.0, 0.0, -1.0 }, 0.5, matLeft));
-    try w.spheres.append(sphere.new(point3{ -1.0, 0.0, -1.0 }, -0.4, matLeft));
-    try w.spheres.append(sphere.new(point3{ 1.0, 0.0, -1.0 }, 0.5, matRight));
-
     // Camera
-    const lookfrom = point3{ 3, 3, 2 };
-    const lookat = point3{ 0, 0, -1 };
+    const lookfrom = point3{ 13, 2, 3 };
+    const lookat = point3{ 0, 0, 0 };
     const vup = vec3{ 0, 1, 0 };
-    const distToFocus = math.sqrt(getDotPro(lookfrom - lookat, lookfrom - lookat));
-    const aperture = 2.0;
+    const distToFocus = 10.0;
+    const vfov = 20;
+    const aperture = 0.1;
     const cam = camera.init(
         lookfrom,
         lookat,
         vup,
-        20,
+        vfov,
         aspectRatio,
         aperture,
         distToFocus,
@@ -440,15 +491,19 @@ pub fn main() !void {
 
     // Render
     try stdout.print("P3\n{d} {d}\n255\n", .{ imageWidth, imageHeight });
-    var j: u8 = imageHeight - 1;
+    var j: u16 = imageHeight - 1;
+
+    var bufWriter = bufIO(stdout);
+    var out = bufWriter.writer();
 
     const clr = "\x1B[K";
+    var timer = try time.Timer.start();
     while (j > 0) : (j -= 1) {
         var i: u16 = 0;
         print("\rScanning remaining lines: {d}{s}", .{ j, clr });
         while (i < imageWidth) : (i += 1) {
             var pixelColor: color = color{ 0, 0, 0 };
-            var s: u8 = 0;
+            var s: u16 = 0;
             while (s <= samples) : (s += 1) {
                 const u = (@intToFloat(f32, i) + getRanFloat(&rnd)) / @intToFloat(f32, imageWidth - 1);
                 const v = (@intToFloat(f32, j) + getRanFloat(&rnd)) / @intToFloat(f32, imageHeight - 1);
@@ -457,8 +512,9 @@ pub fn main() !void {
                 const r: ray = cam.getRay(u, v, &rnd);
                 pixelColor += rayColor(r, w, &rnd, maxDepth);
             }
-            try writeColor(stdout, pixelColor, samples);
+            try writeColor(out, pixelColor, samples);
         }
     }
-    print("\r=== Done rendering ==={s}\n", .{clr});
+    try bufWriter.flush();
+    print("\r=== Done rendering (took: {s}) ==={s}\n", .{ fmt.fmtDuration(timer.read()), clr });
 }
