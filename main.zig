@@ -39,7 +39,7 @@ const metal = struct {
 
     fn scat(self: metal, r: ray, rec: hitRecord, rnd: *randGen) ?scatter {
         const reflected = reflect(getUnitVec(r.dir), rec.n);
-        const sd = ray{ .orig = rec.p, .dir = reflected + expand(self.fuzz) * ranUnitSphere(rnd) };
+        const sd = ray{ .orig = rec.p, .dir = reflected + expand(self.fuzz) * getRanUnitSphere(rnd) };
         if (getDotPro(sd.dir, rec.n) > 0) {
             return scatter{
                 .att = self.albedo,
@@ -104,7 +104,7 @@ const lambertian = struct {
     albedo: color,
 
     pub fn scat(self: lambertian, rec: hitRecord, rnd: *randGen) ?scatter {
-        var sd = rec.n + ranUnitVec(rnd);
+        var sd = rec.n + getRanUnitVec(rnd);
         if (isNearZero(sd)) {
             sd = rec.n;
         }
@@ -208,9 +208,21 @@ const camera = struct {
     lowerLeftCor: point3,
     hor: vec3,
     ver: vec3,
+    u: vec3,
+    v: vec3,
+    w: vec3,
+    lenRadius: f32,
 
     const Self = @This();
-    pub fn init(lookfrom: point3, lookat: point3, vup: vec3, vfov: f32, aspectRatio: f32) Self {
+    pub fn init(
+        lookfrom: point3,
+        lookat: point3,
+        vup: vec3,
+        vfov: f32,
+        aspectRatio: f32,
+        aperture: f32,
+        focusDist: f32,
+    ) Self {
         const theta = math.degreesToRadians(f32, vfov);
         const h = math.tan(theta / 2);
         const viewPortHeight: f32 = 2.0 * h;
@@ -221,21 +233,31 @@ const camera = struct {
         const v = getCrossPro(w, u);
 
         const origin = lookfrom;
-        const hor = expand(viewPortWidth) * u;
-        const ver = expand(viewPortHeight) * v;
+        const hor = expand(focusDist) * expand(viewPortWidth) * u;
+        const ver = expand(focusDist) * expand(viewPortHeight) * v;
         const half = 2;
-        const lowerLeftCor = origin - hor / expand(half) - ver / expand(half) - w;
+        const lowerLeftCor = origin - hor / expand(half) - ver / expand(half) - expand(focusDist) * w;
 
         return Self{
             .origin = origin,
             .lowerLeftCor = lowerLeftCor,
             .hor = hor,
             .ver = ver,
+            .u = u,
+            .v = v,
+            .w = w,
+            .lenRadius = aperture / @as(f32, 2),
         };
     }
 
-    pub fn getRay(self: Self, s: f32, t: f32) ray {
-        return ray{ .orig = self.origin, .dir = self.lowerLeftCor + expand(s) * self.hor + expand(t) * self.ver - self.origin };
+    pub fn getRay(self: Self, s: f32, t: f32, rnd: *randGen) ray {
+        const rd = expand(self.lenRadius) * getRanUnitDisk(rnd);
+        const offset = self.u * expand(rd[0]) + self.v * expand(rd[1]);
+
+        return ray{
+            .orig = self.origin + offset,
+            .dir = self.lowerLeftCor + expand(s) * self.hor + expand(t) * self.ver - self.origin - offset,
+        };
     }
 };
 // get vector from scalar data, basically scalar times a unit vector
@@ -269,28 +291,40 @@ fn getRanFloat(rnd: *randGen) f32 {
     return rnd.random().float(f32);
 }
 
-fn getRanVec(rnd: *randGen, min: f32, max: f32) vec {
-    return vec3{
-        min + (max - min) * rnd.random().float(f32),
-        min + (max - min) * rnd.random().float(f32),
-        min + (max - min) * rnd.random().float(f32),
-    };
+fn getRanFloatInRange(rnd: *randGen, min: f32, max: f32) f32 {
+    return min + (max - min) * getRanFloat(rnd);
 }
 
-fn ranUnitSphere(rnd: *randGen) vec {
+fn getRanUnitSphere(rnd: *randGen) vec {
     while (true) {
-        const p = getRanVec(rnd, -1, 1);
+        const p = vec3{
+            getRanFloatInRange(rnd, -1, 1),
+            getRanFloatInRange(rnd, -1, 1),
+            getRanFloatInRange(rnd, -1, 1),
+        };
         if (getDotPro(p, p) >= 1) continue;
         return p;
     }
 }
 
-fn ranUnitVec(rnd: *randGen) vec {
-    return getUnitVec(ranUnitSphere(rnd));
+fn getRanUnitDisk(rnd: *randGen) vec {
+    while (true) {
+        const p = vec3{
+            getRanFloatInRange(rnd, -1, 1),
+            getRanFloatInRange(rnd, -1, 1),
+            0,
+        };
+        if (getDotPro(p, p) >= 1) continue;
+        return p;
+    }
 }
 
-fn ranInHem(n: vec, rnd: *randGen) vec {
-    const inUnitSphere = ranUnitSphere(rnd);
+fn getRanUnitVec(rnd: *randGen) vec {
+    return getUnitVec(getRanUnitSphere(rnd));
+}
+
+fn getRanInHem(n: vec, rnd: *randGen) vec {
+    const inUnitSphere = getRanUnitSphere(rnd);
     if (getDotPro(inUnitSphere, n) > 0.0) {
         return inUnitSphere;
     } else {
@@ -389,7 +423,20 @@ pub fn main() !void {
     try w.spheres.append(sphere.new(point3{ 1.0, 0.0, -1.0 }, 0.5, matRight));
 
     // Camera
-    const cam = camera.init(point3{ -2, 2, 1 }, point3{ 0, 0, -1 }, vec3{ 0, 1, 0 }, 20, aspectRatio);
+    const lookfrom = point3{ 3, 3, 2 };
+    const lookat = point3{ 0, 0, -1 };
+    const vup = vec3{ 0, 1, 0 };
+    const distToFocus = math.sqrt(getDotPro(lookfrom - lookat, lookfrom - lookat));
+    const aperture = 2.0;
+    const cam = camera.init(
+        lookfrom,
+        lookat,
+        vup,
+        20,
+        aspectRatio,
+        aperture,
+        distToFocus,
+    );
 
     // Render
     try stdout.print("P3\n{d} {d}\n255\n", .{ imageWidth, imageHeight });
@@ -407,7 +454,7 @@ pub fn main() !void {
                 const v = (@intToFloat(f32, j) + getRanFloat(&rnd)) / @intToFloat(f32, imageHeight - 1);
 
                 // the ray is originating & passing through origin in the direction with two vectors imposed on the screen
-                const r: ray = cam.getRay(u, v);
+                const r: ray = cam.getRay(u, v, &rnd);
                 pixelColor += rayColor(r, w, &rnd, maxDepth);
             }
             try writeColor(stdout, pixelColor, samples);
