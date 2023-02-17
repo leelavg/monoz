@@ -1,6 +1,7 @@
 const std = @import("std");
 const time = std.time;
 const fmt = std.fmt;
+const mem = std.mem;
 const math = std.math;
 const bufIO = std.io.bufferedWriter;
 const stdout = std.io.getStdOut().writer();
@@ -453,22 +454,47 @@ fn writeColor(writer: anytype, pixelColor: color, samples: u16) !void {
 }
 
 pub fn main() !void {
-
-    // Image
-    const aspectRatio: f32 = 16.0 / 9.0;
-    const imageWidth: u16 = 1200;
-    const imageHeight: u16 = @floatToInt(u16, @intToFloat(f32, imageWidth) / aspectRatio);
-    const samples: u16 = 500;
-    const maxDepth: u8 = 50;
-
-    var rnd = std.rand.DefaultPrng.init(0);
-
-    // World
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
     defer arena.deinit();
 
     var alloc = arena.allocator();
+    var file: []const u8 = "/tmp/image.ppm";
+
+    // Image
+    var imageHeight: u16 = 675;
+    var imageWidth: u16 = 1200;
+    var samples: u16 = 500;
+    var maxDepth: u8 = 50;
+
+    // Args
+    var args = try std.process.argsAlloc(alloc);
+    defer std.process.argsFree(alloc, args);
+
+    args = args[1..args.len];
+    for (args) |arg| {
+        var split = mem.split(u8, arg, "=");
+        var key = mem.trimLeft(u8, split.first(), "-");
+        var val = split.rest();
+
+        if (mem.eql(u8, key, "height")) {
+            imageHeight = try std.fmt.parseUnsigned(u16, val, 10);
+        } else if (mem.eql(u8, key, "width")) {
+            imageWidth = try std.fmt.parseUnsigned(u16, val, 10);
+        } else if (mem.eql(u8, key, "samples")) {
+            samples = try std.fmt.parseUnsigned(u16, val, 10);
+        } else if (mem.eql(u8, key, "depth")) {
+            maxDepth = try std.fmt.parseUnsigned(u8, val, 10);
+        } else if (mem.eql(u8, key, "file")) {
+            file = val;
+        }
+    }
+
+    const aspectRatio: f32 = @intToFloat(f32, imageWidth) / @intToFloat(f32, imageHeight);
+
+    var rnd = std.rand.DefaultPrng.init(0);
+
+    // World
     var w = try getRanScene(alloc, &rnd);
     defer w.deinit();
 
@@ -490,11 +516,13 @@ pub fn main() !void {
     );
 
     // Render
-    try stdout.print("P3\n{d} {d}\n255\n", .{ imageWidth, imageHeight });
     var j: u16 = imageHeight - 1;
+    var out_file = try std.fs.cwd().createFile(file, .{ .read = false });
+    defer out_file.close();
 
-    var bufWriter = bufIO(stdout);
+    var bufWriter = bufIO(out_file.writer());
     var out = bufWriter.writer();
+    try out.print("P3\n{d} {d}\n255\n", .{ imageWidth, imageHeight });
 
     const clr = "\x1B[K";
     var timer = try time.Timer.start();
