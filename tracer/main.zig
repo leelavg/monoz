@@ -3,32 +3,20 @@ const time = std.time;
 const fmt = std.fmt;
 const mem = std.mem;
 const math = std.math;
-const bufIO = std.io.bufferedWriter;
+const bufio = std.io.bufferedWriter;
 const stdout = std.io.getStdOut().writer();
 const print = std.debug.print;
-const ArrayList = std.ArrayList;
-const randGen = std.rand.DefaultPrng;
-
+const arraylist = std.ArrayList;
+const randgen = std.rand.DefaultPrng;
 const infinity = math.inf_f32;
 const pi = math.pi;
 
-// base type for all vector operations and identifiers
-// return type for all functions operating on vector
 const vec = @Vector(3, f32);
-
-// any adhoc vector type
 const vec3 = vec;
-
-// RGB color representation
 const color = vec;
-
-// a point in 3D space
 const point3 = vec;
 
-// ray which has a origin point and a direction in 3D space
 const ray = struct {
-    // P(t) = A + tb
-    // P = 3D position along a line, t = ray parameter, A = ray origin, b = ray direction
     orig: point3,
     dir: vec3,
 
@@ -37,11 +25,29 @@ const ray = struct {
     }
 };
 
+const scatter = struct {
+    att: color,
+    r: ray,
+};
+
+const hitrecord = struct {
+    p: point3,
+    n: vec3,
+    t: f32,
+    mp: material,
+    frontFace: bool,
+
+    pub fn setFaceNormal(self: *hitrecord, r: ray, outwardNormal: vec3) void {
+        self.*.frontFace = getDotPro(r.dir, outwardNormal) < 0;
+        self.*.n = if (self.frontFace) outwardNormal else -outwardNormal;
+    }
+};
+
 const metal = struct {
     albedo: color,
     fuzz: f32,
 
-    fn scat(self: metal, r: ray, rec: hitRecord, rnd: *randGen) ?scatter {
+    fn scat(self: metal, r: ray, rec: hitrecord, rnd: *randgen) ?scatter {
         const reflected = reflect(getUnitVec(r.dir), rec.n);
         const sd = ray{ .orig = rec.p, .dir = reflected + expand(self.fuzz) * getRanUnitSphere(rnd) };
         if (getDotPro(sd.dir, rec.n) > 0) {
@@ -62,7 +68,7 @@ const dielectric = struct {
         r0 = r0 * r0;
         return r0 + (1 - r0) * math.pow(f32, (1 - cos), 5);
     }
-    fn scat(self: dielectric, r: ray, rec: hitRecord, rnd: *randGen) ?scatter {
+    fn scat(self: dielectric, r: ray, rec: hitrecord, rnd: *randgen) ?scatter {
         const rr = if (rec.frontFace) (1.0 / self.ir) else self.ir;
         const unitDir = getUnitVec(r.dir);
         const cosT = @min(getDotPro(-unitDir, rec.n), 1.0);
@@ -99,15 +105,10 @@ const material = union(enum) {
     }
 };
 
-const scatter = struct {
-    att: color,
-    r: ray,
-};
-
 const lambertian = struct {
     albedo: color,
 
-    pub fn scat(self: lambertian, rec: hitRecord, rnd: *randGen) ?scatter {
+    pub fn scat(self: lambertian, rec: hitrecord, rnd: *randgen) ?scatter {
         var sd = rec.n + getRanUnitVec(rnd);
         if (isNearZero(sd)) {
             sd = rec.n;
@@ -118,19 +119,6 @@ const lambertian = struct {
             .att = att,
             .r = s,
         };
-    }
-};
-
-const hitRecord = struct {
-    p: point3,
-    n: vec3,
-    t: f32,
-    mp: material,
-    frontFace: bool,
-
-    pub fn setFaceNormal(self: *hitRecord, r: ray, outwardNormal: vec3) void {
-        self.*.frontFace = getDotPro(r.dir, outwardNormal) < 0;
-        self.*.n = if (self.frontFace) outwardNormal else -outwardNormal;
     }
 };
 
@@ -147,7 +135,7 @@ const sphere = struct {
         };
     }
 
-    pub fn hit(self: sphere, r: ray, tMin: f32, tMax: f32) ?hitRecord {
+    pub fn hit(self: sphere, r: ray, tMin: f32, tMax: f32) ?hitrecord {
         const oc = r.orig - self.center;
         const a = getDotPro(r.dir, r.dir);
         const half_b = getDotPro(oc, r.dir);
@@ -167,7 +155,7 @@ const sphere = struct {
             }
         }
 
-        var rec: hitRecord = undefined;
+        var rec: hitrecord = undefined;
         rec.t = root;
         rec.p = r.at(rec.t);
         rec.n = (rec.p - self.center) / expand(self.radius);
@@ -180,18 +168,18 @@ const sphere = struct {
 };
 
 const world = struct {
-    spheres: ArrayList(sphere),
+    spheres: arraylist(sphere),
 
     pub fn init(alloc: std.mem.Allocator) world {
-        return world{ .spheres = ArrayList(sphere).init(alloc) };
+        return world{ .spheres = arraylist(sphere).init(alloc) };
     }
 
     pub fn deinit(self: *world) void {
         self.spheres.deinit();
     }
 
-    pub fn hit(self: *const world, r: ray, tMin: f32, tMax: f32) ?hitRecord {
-        var mayHit: ?hitRecord = null;
+    pub fn hit(self: *const world, r: ray, tMin: f32, tMax: f32) ?hitrecord {
+        var mayHit: ?hitrecord = null;
         var closestSoFar = tMax;
 
         for (self.spheres.items) |item| {
@@ -254,7 +242,7 @@ const camera = struct {
         };
     }
 
-    pub fn getRay(self: Self, s: f32, t: f32, rnd: *randGen) ray {
+    pub fn getRay(self: Self, s: f32, t: f32, rnd: *randgen) ray {
         const rd = expand(self.lenRadius) * getRanUnitDisk(rnd);
         const offset = self.u * expand(rd[0]) + self.v * expand(rd[1]);
 
@@ -264,7 +252,7 @@ const camera = struct {
         };
     }
 };
-// get vector from scalar data, basically scalar times a unit vector
+
 fn expand(val: f32) vec {
     return @splat(3, val);
 }
@@ -273,12 +261,10 @@ fn degToRad(deg: f32) f32 {
     return deg * pi / 180;
 }
 
-// return unit vector along a direction
 fn getUnitVec(dir: vec) vec {
     return dir / expand(math.sqrt(getDotPro(dir, dir)));
 }
 
-// return dot product of two vectors
 fn getDotPro(v1: vec, v2: vec) f32 {
     return @reduce(.Add, v1 * v2);
 }
@@ -291,15 +277,15 @@ fn getCrossPro(v1: vec, v2: vec) vec {
     };
 }
 
-fn getRanFloat(rnd: *randGen) f32 {
+fn getRanFloat(rnd: *randgen) f32 {
     return rnd.random().float(f32);
 }
 
-fn getRanFloatInRange(rnd: *randGen, min: f32, max: f32) f32 {
+fn getRanFloatInRange(rnd: *randgen, min: f32, max: f32) f32 {
     return min + (max - min) * getRanFloat(rnd);
 }
 
-fn getRanVec(rnd: *randGen) vec3 {
+fn getRanVec(rnd: *randgen) vec3 {
     return vec3{
         getRanFloat(rnd),
         getRanFloat(rnd),
@@ -307,7 +293,7 @@ fn getRanVec(rnd: *randGen) vec3 {
     };
 }
 
-fn getRanVecInRange(rnd: *randGen, min: f32, max: f32) vec3 {
+fn getRanVecInRange(rnd: *randgen, min: f32, max: f32) vec3 {
     return vec3{
         getRanFloatInRange(rnd, min, max),
         getRanFloatInRange(rnd, min, max),
@@ -315,7 +301,7 @@ fn getRanVecInRange(rnd: *randGen, min: f32, max: f32) vec3 {
     };
 }
 
-fn getRanUnitSphere(rnd: *randGen) vec {
+fn getRanUnitSphere(rnd: *randgen) vec {
     while (true) {
         const p = getRanVecInRange(rnd, -1, 1);
         if (getDotPro(p, p) >= 1) continue;
@@ -323,7 +309,7 @@ fn getRanUnitSphere(rnd: *randGen) vec {
     }
 }
 
-fn getRanUnitDisk(rnd: *randGen) vec {
+fn getRanUnitDisk(rnd: *randgen) vec {
     while (true) {
         const p = vec3{
             getRanFloatInRange(rnd, -1, 1),
@@ -335,11 +321,11 @@ fn getRanUnitDisk(rnd: *randGen) vec {
     }
 }
 
-fn getRanUnitVec(rnd: *randGen) vec {
+fn getRanUnitVec(rnd: *randgen) vec {
     return getUnitVec(getRanUnitSphere(rnd));
 }
 
-fn getRanInHem(n: vec, rnd: *randGen) vec {
+fn getRanInHem(n: vec, rnd: *randgen) vec {
     const inUnitSphere = getRanUnitSphere(rnd);
     if (getDotPro(inUnitSphere, n) > 0.0) {
         return inUnitSphere;
@@ -348,7 +334,7 @@ fn getRanInHem(n: vec, rnd: *randGen) vec {
     }
 }
 
-fn getRanScene(alloc: std.mem.Allocator, rnd: *randGen) !world {
+fn getRanScene(alloc: std.mem.Allocator, rnd: *randgen) !world {
     var w: world = world.init(alloc);
 
     const matGround = material.lamber(color{ 0.5, 0.5, 0.5 });
@@ -410,8 +396,7 @@ fn refract(uv: vec, n: vec, eoe: f32) vec {
     return rPer + rPar;
 }
 
-// returns background color, a simple gradient
-fn rayColor(r: ray, w: world, rnd: *randGen, depth: u8) color {
+fn rayColor(r: ray, w: world, rnd: *randgen, depth: u8) color {
     if (depth <= 0) return color{ 0, 0, 0 };
 
     if (w.hit(r, 0.001, infinity)) |rec| {
@@ -425,7 +410,6 @@ fn rayColor(r: ray, w: world, rnd: *randGen, depth: u8) color {
     }
     const unitDir = getUnitVec(r.dir);
     const t = 0.5 * (unitDir[1] + 1.0);
-    // blendedvalue = (1-t)*startVal + t*endVal
     return expand(1 - t) * color{ 1.0, 1.0, 1.0 } + expand(t) * color{ 0.5, 0.7, 1.0 };
 }
 
@@ -435,8 +419,6 @@ fn clamp(x: f32, min: f32, max: f32) f32 {
     return x;
 }
 
-// output the rgb info to writer, calculations correspond to how much percent of
-// a color from rgb represents a single pixel
 fn writeColor(writer: anytype, pixelColor: color, samples: u16) !void {
     var r = pixelColor[0];
     var g = pixelColor[1];
@@ -447,21 +429,22 @@ fn writeColor(writer: anytype, pixelColor: color, samples: u16) !void {
     g = math.sqrt(scale * g);
     b = math.sqrt(scale * b);
 
-    const ir = @floatToInt(u16, 255.999 * clamp(r, 0.0, 0.999));
-    const ig = @floatToInt(u16, 255.999 * clamp(g, 0.0, 0.999));
-    const ib = @floatToInt(u16, 255.999 * clamp(b, 0.0, 0.999));
+    const ir = @floatToInt(u8, 255.999 * clamp(r, 0.0, 0.999));
+    const ig = @floatToInt(u8, 255.999 * clamp(g, 0.0, 0.999));
+    const ib = @floatToInt(u8, 255.999 * clamp(b, 0.0, 0.999));
     try writer.print("{d} {d} {d}\n", .{ ir, ig, ib });
 }
 
 pub fn main() !void {
+
+    // Allocator
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
     defer arena.deinit();
-
     var alloc = arena.allocator();
-    var file: []const u8 = "/tmp/image.ppm";
 
     // Image
+    var file: []const u8 = "/tmp/image.ppm";
     var imageHeight: u16 = 675;
     var imageWidth: u16 = 1200;
     var samples: u16 = 500;
@@ -520,7 +503,7 @@ pub fn main() !void {
     var out_file = try std.fs.cwd().createFile(file, .{ .read = false });
     defer out_file.close();
 
-    var bufWriter = bufIO(out_file.writer());
+    var bufWriter = bufio(out_file.writer());
     var out = bufWriter.writer();
     try out.print("P3\n{d} {d}\n255\n", .{ imageWidth, imageHeight });
 
