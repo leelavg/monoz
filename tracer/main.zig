@@ -4,17 +4,24 @@ const fmt = std.fmt;
 const mem = std.mem;
 const math = std.math;
 const bufio = std.io.bufferedWriter;
-const stdout = std.io.getStdOut().writer();
 const print = std.debug.print;
 const arraylist = std.ArrayList;
 const randgen = std.rand.DefaultPrng;
 const infinity = math.inf_f32;
 const pi = math.pi;
+const mutex = std.Thread.Mutex;
 
 const vec = @Vector(3, f32);
 const vec3 = vec;
 const color = vec;
 const point3 = vec;
+
+const c_clr = "\x1b[0K";
+const c_up = "\x1b[{d}A";
+const c_down = "\x1b[{d}B";
+const c_save = "\x1b[s";
+const c_res = "\x1b[u";
+const c_screen = "\x1b[{d}J";
 
 const ray = struct {
     orig: point3,
@@ -327,11 +334,7 @@ fn getRanUnitVec(rnd: *randgen) vec {
 
 fn getRanInHem(n: vec, rnd: *randgen) vec {
     const inUnitSphere = getRanUnitSphere(rnd);
-    if (getDotPro(inUnitSphere, n) > 0.0) {
-        return inUnitSphere;
-    } else {
-        return -inUnitSphere;
-    }
+    return if (getDotPro(inUnitSphere, n) > 0.0) inUnitSphere else -inUnitSphere;
 }
 
 fn getRanScene(alloc: std.mem.Allocator, rnd: *randgen) !world {
@@ -396,7 +399,7 @@ fn refract(uv: vec, n: vec, eoe: f32) vec {
     return rPer + rPar;
 }
 
-fn rayColor(r: ray, w: world, rnd: *randgen, depth: u8) color {
+fn rayColor(r: ray, w: *const world, rnd: *randgen, depth: u8) color {
     if (depth <= 0) return color{ 0, 0, 0 };
 
     if (w.hit(r, 0.001, infinity)) |rec| {
@@ -414,12 +417,10 @@ fn rayColor(r: ray, w: world, rnd: *randgen, depth: u8) color {
 }
 
 fn clamp(x: f32, min: f32, max: f32) f32 {
-    if (x < min) return min;
-    if (x > max) return max;
-    return x;
+    return if (x < min) min else if (x > max) max else x;
 }
 
-fn writeColor(writer: anytype, pixelColor: color, samples: u16) !void {
+fn writeColor(sur: []pixel, w: u32, h: u32, pixelColor: color, samples: u16) void {
     var r = pixelColor[0];
     var g = pixelColor[1];
     var b = pixelColor[2];
@@ -432,7 +433,73 @@ fn writeColor(writer: anytype, pixelColor: color, samples: u16) !void {
     const ir = @floatToInt(u8, 255.999 * clamp(r, 0.0, 0.999));
     const ig = @floatToInt(u8, 255.999 * clamp(g, 0.0, 0.999));
     const ib = @floatToInt(u8, 255.999 * clamp(b, 0.0, 0.999));
-    try writer.print("{d} {d} {d}\n", .{ ir, ig, ib });
+
+    sur[w + h] = pixel{ .ir = ir, .ig = ig, .ib = ib };
+}
+
+fn writePPM(writer: anytype, sur: []pixel, w: u16, h: u16) !void {
+    try writer.print("P3\n{d} {d}\n255\n", .{ w, h });
+    for (sur) |c| try writer.print("{d} {d} {d}\n", .{ c.ir, c.ig, c.ib });
+}
+
+const config = struct {
+    file: []const u8 = "/tmp/image.ppm",
+    imageHeight: u16 = 720,
+    imageWidth: u16 = 1280,
+    samples: u16 = 500,
+    maxDepth: u8 = 50,
+    tCount: usize = 1,
+};
+
+const pixel = packed struct {
+    ir: u8 = undefined,
+    ig: u8 = undefined,
+    ib: u8 = undefined,
+};
+
+const threadcontext = struct {
+    thread_idx: u16,
+    num_pixels: u32,
+    chunk_size: u32,
+    rnd: randgen,
+    w: *const world,
+    c: *const camera,
+    cfg: *const config,
+    sur: *[]pixel,
+    mu: *mutex,
+};
+
+fn renderFn(ctx: *threadcontext) void {
+    const start: u32 = @as(u32, ctx.thread_idx) * ctx.chunk_size;
+    const end: u32 = if (start + @as(u32, ctx.chunk_size) <= ctx.num_pixels) start + @as(u32, ctx.chunk_size) else ctx.num_pixels;
+
+    var idx: u32 = start;
+    while (idx < end) : (idx += 1) {
+        // https://stackoverflow.com/a/56708654
+        const w: u16 = @intCast(u16, idx % ctx.cfg.imageWidth);
+        const h: u16 = @intCast(u16, idx / ctx.cfg.imageWidth);
+        var pixelColor: color = color{ 0, 0, 0 };
+        var s: u16 = 0;
+
+        if ((idx % 91 == 0 or idx == end - 1) and ctx.mu.tryLock()) {
+            defer ctx.mu.unlock();
+            var buf: [10]u8 = undefined;
+            const down = fmt.bufPrint(&buf, c_down, .{ctx.thread_idx + 1}) catch unreachable;
+            print("{s}{s}{s}Remaining pixels (t{d}): {d}{s}", .{ c_save, down, c_clr, ctx.thread_idx, end - idx - 1, c_res });
+        }
+
+        while (s <= ctx.cfg.samples) : (s += 1) {
+            const u = (@intToFloat(f32, w) + getRanFloat(&ctx.rnd)) / @intToFloat(f32, ctx.cfg.imageWidth);
+            const v = (@intToFloat(f32, h) + getRanFloat(&ctx.rnd)) / @intToFloat(f32, ctx.cfg.imageHeight);
+
+            const r: ray = ctx.c.getRay(u, v, &ctx.rnd);
+            pixelColor += rayColor(r, ctx.w, &ctx.rnd, ctx.cfg.maxDepth);
+        }
+
+        const px: u32 = w;
+        const py: u32 = @as(u32, ctx.cfg.imageHeight - h - 1) * ctx.cfg.imageWidth;
+        writeColor(ctx.sur.*, px, py, pixelColor, ctx.cfg.samples);
+    }
 }
 
 pub fn main() !void {
@@ -443,12 +510,9 @@ pub fn main() !void {
     defer arena.deinit();
     var alloc = arena.allocator();
 
-    // Image
-    var file: []const u8 = "/tmp/image.ppm";
-    var imageHeight: u16 = 675;
-    var imageWidth: u16 = 1200;
-    var samples: u16 = 500;
-    var maxDepth: u8 = 50;
+    // Config
+    var cfg = config{};
+    cfg.tCount = try std.Thread.getCpuCount();
 
     // Args
     var args = try std.process.argsAlloc(alloc);
@@ -461,19 +525,19 @@ pub fn main() !void {
         var val = split.rest();
 
         if (mem.eql(u8, key, "height")) {
-            imageHeight = try std.fmt.parseUnsigned(u16, val, 10);
+            cfg.imageHeight = try fmt.parseUnsigned(u16, val, 10);
         } else if (mem.eql(u8, key, "width")) {
-            imageWidth = try std.fmt.parseUnsigned(u16, val, 10);
+            cfg.imageWidth = try fmt.parseUnsigned(u16, val, 10);
         } else if (mem.eql(u8, key, "samples")) {
-            samples = try std.fmt.parseUnsigned(u16, val, 10);
+            cfg.samples = try fmt.parseUnsigned(u16, val, 10);
         } else if (mem.eql(u8, key, "depth")) {
-            maxDepth = try std.fmt.parseUnsigned(u8, val, 10);
+            cfg.maxDepth = try fmt.parseUnsigned(u8, val, 10);
         } else if (mem.eql(u8, key, "file")) {
-            file = val;
+            cfg.file = val;
         }
     }
 
-    const aspectRatio: f32 = @intToFloat(f32, imageWidth) / @intToFloat(f32, imageHeight);
+    const aspectRatio: f32 = @intToFloat(f32, cfg.imageWidth) / @intToFloat(f32, cfg.imageHeight);
 
     var rnd = std.rand.DefaultPrng.init(0);
 
@@ -498,34 +562,72 @@ pub fn main() !void {
         distToFocus,
     );
 
-    // Render
-    var j: u16 = imageHeight - 1;
-    var out_file = try std.fs.cwd().createFile(file, .{ .read = false });
+    const np: u32 = @as(u32, cfg.imageWidth) * cfg.imageHeight;
+
+    // Return array
+    var surface: []pixel = try alloc.alloc(pixel, np);
+    defer alloc.free(surface);
+
+    // Threads
+    var tasks = arraylist(std.Thread).init(alloc);
+    defer tasks.deinit();
+
+    var ctxs = arraylist(threadcontext).init(alloc);
+    defer ctxs.deinit();
+
+    const chunk_size = blk: {
+        const n = np / cfg.tCount;
+        const rem = np % cfg.tCount;
+
+        if (rem > 0) {
+            break :blk n + 1;
+        } else {
+            break :blk n;
+        }
+    };
+
+    var ithread: u16 = 0;
+
+    // Console output
+    var line: usize = 0;
+    while (line <= cfg.tCount) : (line += 1) {
+        print("\n", .{});
+    }
+    print(c_up, .{line});
+
+    var mu: mutex = .{};
+    while (ithread < cfg.tCount) : (ithread += 1) {
+        try ctxs.append(threadcontext{
+            .thread_idx = ithread,
+            .num_pixels = np,
+            .chunk_size = @intCast(u32, chunk_size),
+            .rnd = std.rand.DefaultPrng.init(@intCast(u64, ithread)),
+            .w = &w,
+            .c = &cam,
+            .cfg = &cfg,
+            .sur = &surface,
+            .mu = &mu,
+        });
+        const thread = try std.Thread.spawn(.{}, renderFn, .{&ctxs.items[ithread]});
+        try tasks.append(thread);
+    }
+
+    var timer = try time.Timer.start();
+    for (tasks.items) |task| {
+        task.join();
+    }
+
+    // Write
+    var out_file = try std.fs.cwd().createFile(cfg.file, .{ .read = false });
     defer out_file.close();
 
     var bufWriter = bufio(out_file.writer());
     var out = bufWriter.writer();
-    try out.print("P3\n{d} {d}\n255\n", .{ imageWidth, imageHeight });
-
-    const clr = "\x1B[K";
-    var timer = try time.Timer.start();
-    while (j > 0) : (j -= 1) {
-        var i: u16 = 0;
-        print("\rScanning remaining lines: {d}{s}", .{ j, clr });
-        while (i < imageWidth) : (i += 1) {
-            var pixelColor: color = color{ 0, 0, 0 };
-            var s: u16 = 0;
-            while (s <= samples) : (s += 1) {
-                const u = (@intToFloat(f32, i) + getRanFloat(&rnd)) / @intToFloat(f32, imageWidth - 1);
-                const v = (@intToFloat(f32, j) + getRanFloat(&rnd)) / @intToFloat(f32, imageHeight - 1);
-
-                // the ray is originating & passing through origin in the direction with two vectors imposed on the screen
-                const r: ray = cam.getRay(u, v, &rnd);
-                pixelColor += rayColor(r, w, &rnd, maxDepth);
-            }
-            try writeColor(out, pixelColor, samples);
-        }
-    }
+    try writePPM(out, surface, cfg.imageWidth, cfg.imageHeight);
     try bufWriter.flush();
-    print("\r=== Done rendering (took: {s}) ==={s}\n", .{ fmt.fmtDuration(timer.read()), clr });
+
+    // print(c_down, .{cfg.tCount + 1});
+    print(c_screen, .{0});
+
+    print("\r=== Done rendering (took: {s}) ==={s}\n", .{ fmt.fmtDuration(timer.read()), c_clr });
 }
