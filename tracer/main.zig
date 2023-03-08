@@ -9,7 +9,6 @@ const arraylist = std.ArrayList;
 const randgen = std.rand.DefaultPrng;
 const infinity = math.inf_f32;
 const pi = math.pi;
-const mutex = std.Thread.Mutex;
 
 const vec = @Vector(3, f32);
 const vec3 = vec;
@@ -466,7 +465,6 @@ const threadcontext = struct {
     c: *const camera,
     cfg: *const config,
     sur: *[]pixel,
-    mu: *mutex,
 };
 
 fn renderFn(ctx: *threadcontext) void {
@@ -481,8 +479,7 @@ fn renderFn(ctx: *threadcontext) void {
         var pixelColor: color = color{ 0, 0, 0 };
         var s: u16 = 0;
 
-        if ((idx % 91 == 0 or idx == end - 1) and ctx.mu.tryLock()) {
-            defer ctx.mu.unlock();
+        if (idx % 191 == 0 or idx == end - 1) {
             var buf: [10]u8 = undefined;
             const down = fmt.bufPrint(&buf, c_down, .{ctx.thread_idx + 1}) catch unreachable;
             print("{s}{s}{s}Remaining pixels (t{d}): {d}{s}", .{ c_save, down, c_clr, ctx.thread_idx, end - idx - 1, c_res });
@@ -595,7 +592,6 @@ pub fn main() !void {
     }
     print(c_up, .{line});
 
-    var mu: mutex = .{};
     while (ithread < cfg.tCount) : (ithread += 1) {
         try ctxs.append(threadcontext{
             .thread_idx = ithread,
@@ -606,7 +602,6 @@ pub fn main() !void {
             .c = &cam,
             .cfg = &cfg,
             .sur = &surface,
-            .mu = &mu,
         });
         const thread = try std.Thread.spawn(.{}, renderFn, .{&ctxs.items[ithread]});
         try tasks.append(thread);
