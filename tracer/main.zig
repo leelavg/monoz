@@ -469,7 +469,7 @@ const threadcontext = struct {
 
 fn renderFn(ctx: *threadcontext) void {
     const start: u32 = @as(u32, ctx.thread_idx) * ctx.chunk_size;
-    const end: u32 = if (start + @as(u32, ctx.chunk_size) <= ctx.num_pixels) start + @as(u32, ctx.chunk_size) else ctx.num_pixels;
+    const end: u32 = if (start + ctx.chunk_size <= ctx.num_pixels) start + ctx.chunk_size else ctx.num_pixels;
 
     var idx: u32 = start;
     while (idx < end) : (idx += 1) {
@@ -503,13 +503,15 @@ pub fn main() !void {
 
     // Allocator
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
     defer arena.deinit();
+
     var alloc = arena.allocator();
 
     // Config
     var cfg = config{};
-    cfg.tCount = try std.Thread.getCpuCount();
 
     // Args
     var args = try std.process.argsAlloc(alloc);
@@ -531,6 +533,10 @@ pub fn main() !void {
             cfg.maxDepth = try fmt.parseUnsigned(u8, val, 10);
         } else if (mem.eql(u8, key, "file")) {
             cfg.file = val;
+        } else if (mem.eql(u8, key, "threads")) {
+            const count = try fmt.parseUnsigned(usize, val, 10);
+            const max = try std.Thread.getCpuCount();
+            cfg.tCount = if (count < 1) 1 else if (count > max) max else count;
         }
     }
 
@@ -592,6 +598,7 @@ pub fn main() !void {
     }
     print(c_up, .{line});
 
+    try ctxs.ensureTotalCapacity(cfg.tCount);
     while (ithread < cfg.tCount) : (ithread += 1) {
         try ctxs.append(threadcontext{
             .thread_idx = ithread,
@@ -621,7 +628,7 @@ pub fn main() !void {
     try writePPM(out, surface, cfg.imageWidth, cfg.imageHeight);
     try bufWriter.flush();
 
-    // print(c_down, .{cfg.tCount + 1});
+    // print(c_down, .{cfg.tCount + 1}); // not to clear individual lines
     print(c_screen, .{0});
 
     print("\r=== Done rendering (took: {s}) ==={s}\n", .{ fmt.fmtDuration(timer.read()), c_clr });
